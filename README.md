@@ -77,12 +77,9 @@ firebase use <your-project-id>
 firebase deploy --only hosting
 ```
 
-The included `firebase.json` excludes repository-only files and adds browser security headers. The Firebase workflow creates pull-request preview channels and deploys `main` to production after these repository settings are configured:
+The included `firebase.json` excludes repository-only files and adds browser security headers.
 
-- Variable: `FIREBASE_PROJECT_ID`
-- Secret: `FIREBASE_SERVICE_ACCOUNT_DRIVEASSIST`
-
-Until both are present, the workflow reports a safe skip instead of failing or exposing credentials. Do not place credentials in this repository.
+Firebase deployment is manual. This repository contains no CI workflow, so there are no automated pull-request preview channels. If you add one, supply the project ID and a service-account credential through GitHub repository variables and secrets. Do not place credentials in this repository.
 
 ## Privacy and security
 
