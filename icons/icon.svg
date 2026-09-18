@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">DriveAssist road shield</title>
+  <defs>
+    <linearGradient id="bg" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102c43"/>
+      <stop offset="1" stop-color="#06101e"/>
+    </linearGradient>
+    <linearGradient id="road" x1="256" y1="150" x2="256" y2="418" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#75f2c9"/>
+      <stop offset="1" stop-color="#18c992"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="118" fill="url(#bg)"/>
+  <path d="M256 70 410 126v119c0 98-59 166-154 204C161 411 102 343 102 245V126L256 70Z" fill="#091827" stroke="#47e6b1" stroke-width="16"/>
+  <path d="M217 362 245 166h22l28 196h-78Z" fill="url(#road)" opacity=".2"/>
+  <path d="m256 174-4 47h8l-4-47Zm-7 78-7 76h28l-7-76h-14Zm-12 108-5 45h48l-5-45h-38Z" fill="url(#road)"/>
+  <path d="M170 351 214 177M342 351 298 177" stroke="#f5f8fc" stroke-width="18" stroke-linecap="round" opacity=".88"/>
+  <circle cx="256" cy="137" r="18" fill="#ffca57"/>
+</svg>

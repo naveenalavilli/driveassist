@@ -1,0 +1,7 @@
+DriveAssist
+Copyright 2026 Naveen Alavilli
+
+This product includes software developed using TensorFlow.js and the COCO-SSD model.
+Modified files in the 2026 production-readiness update add the DriveAssist dashboard,
+GPS speed alerts, relative-proximity warnings, experimental lane guidance, PWA support,
+privacy documentation, automated tests, and author attribution.

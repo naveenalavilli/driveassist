@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#050b14">
+  <meta name="description" content="DriveAssist settings, capabilities, safety guidance, and privacy information.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'self'; form-action 'self'; object-src 'none'">
+  <title>About & Settings — DriveAssist</title>
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to settings</a>
+  <header class="site-header">
+    <a class="brand" href="./">
+      <img src="icons/icon.svg" alt="" width="42" height="42">
+      <span><strong>DriveAssist</strong><small>About & settings</small></span>
+    </a>
+    <a class="button button-primary button-compact" href="./">Start assistance</a>
+  </header>
+
+  <main class="content-page" id="main">
+    <section class="content-hero">
+      <p class="eyebrow">Set up while parked</p>
+      <h1>A second set of eyes.<br><span>..but not a replacement for yours.</span></h1>
+      <p class="hero-copy">DriveAssist provides local visual and audio cues for selected road objects, speed, and lane position. Camera analysis is experimental and can miss or misidentify hazards.</p>
+    </section>
+
+    <section class="panel settings" aria-labelledby="settingsHeading">
+      <div class="panel-heading">
+        <div><p class="eyebrow">Preferences</p><h2 id="settingsHeading">Assistance settings</h2></div>
+        <span class="save-state" id="saveState" aria-live="polite">Saved on device</span>
+      </div>
+      <label class="field-row" for="speedLimit">
+        <span><strong>Speed alert</strong><small>Selected road limit</small></span>
+        <select id="speedLimit">
+          <option value="25">25 mph</option><option value="35">35 mph</option><option value="45">45 mph</option>
+          <option value="55">55 mph</option><option value="65">65 mph</option><option value="70">70 mph</option><option value="75">75 mph</option>
+        </select>
+      </label>
+      <label class="field-row" for="confidence">
+        <span><strong>AI confidence</strong><small>Minimum object score</small></span>
+        <select id="confidence">
+          <option value="0.45">More detections</option><option value="0.55">Balanced</option><option value="0.7">High confidence</option>
+        </select>
+      </label>
+      <label class="field-row toggle-row" for="enableLane">
+        <span><strong>Lane guidance</strong><small>Experimental camera estimate</small></span><input id="enableLane" type="checkbox">
+      </label>
+      <label class="field-row toggle-row" for="enableAudio">
+        <span><strong>Audio warnings</strong><small>Short attention tone</small></span><input id="enableAudio" type="checkbox">
+      </label>
+      <label class="field-row toggle-row" for="enableNotifications">
+        <span><strong>Notifications</strong><small>Warnings when the app is hidden</small></span><input id="enableNotifications" type="checkbox">
+      </label>
+    </section>
+
+    <section class="capability-grid" aria-label="DriveAssist capabilities">
+      <article><span aria-hidden="true">⌖</span><h2>Road objects</h2><p>Recognizes people, vehicles, traffic lights, and stop signs using COCO-SSD. It does not recognize every road sign.</p></article>
+      <article><span aria-hidden="true">◎</span><h2>Relative proximity</h2><p>Uses bounding-box size to label objects far, mid-range, or near. It does not claim an uncalibrated distance in meters.</p></article>
+      <article><span aria-hidden="true">⇥</span><h2>Lane guidance</h2><p>Estimates bright lane markings in good visibility. Weather, road quality, curves, and camera placement reduce reliability.</p></article>
+    </section>
+
+    <section class="safety-section" aria-labelledby="safetyHeading">
+      <div><p class="eyebrow">Use responsibly</p><h2 id="safetyHeading">Experimental software—not a vehicle safety system.</h2></div>
+      <p>Mount your phone securely and set up DriveAssist only while parked. Never interact with the screen while moving. Obey posted signs and applicable laws. Do not rely on this app to prevent collisions, determine safe speed, or keep a vehicle in its lane.</p>
+    </section>
+  </main>
+
+  <footer>
+    <div><strong>DriveAssist</strong><span>Camera and location data are processed locally.</span></div>
+    <nav aria-label="Footer"><a href="privacy.html">Privacy</a><a href="https://github.com/naveenalavilli/driveassist" rel="noreferrer">Source</a><a href="https://github.com/naveenalavilli" rel="noreferrer">Made by Naveen Alavilli</a></nav>
+  </footer>
+  <script src="settings.js" defer></script>
+</body>
+</html>

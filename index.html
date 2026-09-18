@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050b14">
+  <meta name="description" content="DriveAssist is a privacy-first browser driving companion with local road awareness, GPS speed alerts, and experimental lane guidance.">
+  <meta name="author" content="Naveen Alavilli">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; worker-src 'self' blob:; manifest-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="DriveAssist — One-tap road assistance">
+  <meta property="og:description" content="Open, tap, and start local road awareness on your phone.">
+  <meta property="og:image" content="icons/social-card.svg">
+  <meta name="twitter:card" content="summary_large_image">
+  <title>DriveAssist — Start assistance</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="drive-page">
+  <a class="skip-link" href="#main">Skip to assistance</a>
+
+  <header class="site-header drive-header">
+    <a class="brand" href="./" aria-label="DriveAssist home">
+      <img src="icons/icon.svg" alt="" width="42" height="42">
+      <strong>DriveAssist</strong>
+    </a>
+    <div class="header-actions">
+      <span class="status-chip" id="appStatus" aria-live="polite">Ready</span>
+      <button class="icon-button" id="installButton" type="button" hidden>Install</button>
+      <a class="icon-button" href="info.html" aria-label="About and settings">Info</a>
+    </div>
+  </header>
+
+  <main class="drive-main" id="main">
+    <section class="assist-stage" aria-labelledby="assistHeading">
+      <h1 class="visually-hidden" id="assistHeading">DriveAssist road assistance</h1>
+
+      <div class="video-shell" id="videoShell" data-active="false">
+        <video id="roadCamera" autoplay muted playsinline aria-label="Rear camera road view"></video>
+        <canvas id="detectionCanvas" aria-hidden="true"></canvas>
+        <canvas id="processingCanvas" width="160" height="90" hidden></canvas>
+
+        <div class="camera-placeholder" aria-hidden="true">
+          <span class="road-mark road-mark-left"></span>
+          <span class="road-mark road-mark-right"></span>
+          <img src="icons/icon.svg" alt="" width="88" height="88">
+        </div>
+
+        <div class="stage-status" aria-label="System readiness">
+          <span class="status-chip" id="modelStatus" data-tone="working">AI loading</span>
+          <span class="status-chip" id="cameraStatus">Camera off</span>
+        </div>
+
+        <div class="speed-hud" aria-label="Current speed">
+          <span id="speedValue">--</span>
+          <div><strong>mph</strong><small id="speedSource">GPS waiting</small></div>
+        </div>
+
+        <div class="view-hud" aria-live="assertive">
+          <span id="latestAlert">Ready to assist</span>
+        </div>
+
+        <div class="error-panel" id="errorPanel" role="alert" hidden>
+          <strong>Unable to start</strong>
+          <span id="errorText"></span>
+        </div>
+
+        <div class="start-dock">
+          <button class="button button-primary start-button" id="startButton" type="button">
+            <span aria-hidden="true">▶</span> Start assistance
+          </button>
+          <button class="button button-danger stop-button" id="stopButton" type="button" hidden>
+            <span aria-hidden="true">■</span> Stop
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="drive-footer">
+    <a href="https://github.com/naveenalavilli" rel="noreferrer">Made by Naveen Alavilli</a>
+  </footer>
+
+  <noscript><p class="noscript">DriveAssist requires JavaScript for local camera analysis.</p></noscript>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js" integrity="sha384-vE8hbVJ4lezako5rlvE7bY0BVzWlFhZncPlckrqNwcUQpVtgbENTgZ8TBbnPjZre" crossorigin="anonymous" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js" integrity="sha384-7qLdgfEQyO9ZQi9ArRHigK+IBto4XPk468jAqc+fnsXaZIcMAhQeLwzggRK7aESl" crossorigin="anonymous" defer></script>
+  <script src="drive-core.js" defer></script>
+  <script src="script.js" defer></script>
+</body>
+</html>

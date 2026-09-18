@@ -1,0 +1,14 @@
+{
+  "name": "driveassist",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Privacy-first browser road awareness",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check drive-core.js && node --check script.js && node --check settings.js && node --check sw.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0"
+}
