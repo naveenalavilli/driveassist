@@ -19,15 +19,17 @@
     <p class="hero-copy">DriveAssist is designed to analyze camera frames and location data on your device.</p>
     <section class="panel legal-copy">
       <h2>Camera</h2>
-      <p>Camera frames are processed in the browser for object and lane estimates. DriveAssist does not upload, record, or store the video stream.</p>
+      <p>Camera frames and cropped sign images are processed in browser memory for object, lane, and text-sign estimates. Sign OCR runs on your device. DriveAssist does not upload, record, or store the video stream or sign images.</p>
       <h2>Location</h2>
       <p>While driving mode is active, location is used to calculate and display speed. Coordinates are not stored by DriveAssist or transmitted to an application server.</p>
+      <h2>Motion sensors</h2>
+      <p>Optional gyroscope and accelerometer readings provide local motion cues when GPS is unavailable. Readings remain in memory, are not uploaded or saved, and are cleared when assistance stops. You can disable motion fallback in settings or decline sensor permission.</p>
       <h2>Settings and alerts</h2>
       <p>Your selected speed limit, warning preferences, and recent in-session alerts remain on your device. Recent alerts are cleared when the page reloads; preferences use browser local storage.</p>
       <h2>Third-party model delivery</h2>
-      <p>TensorFlow.js and COCO-SSD assets are downloaded from jsDelivr and Google-hosted model storage. Those providers may receive standard request metadata such as IP address and user agent. Previously downloaded assets may be cached for offline use.</p>
+      <p>TensorFlow.js, COCO-SSD, Tesseract.js, its WebAssembly core, and English OCR language data are downloaded from jsDelivr and Google-hosted model storage. Those providers may receive standard request metadata such as IP address and user agent. Previously downloaded model and language assets may be cached for offline use.</p>
       <h2>Permissions</h2>
-      <p>Camera, location, and notifications are controlled through browser permissions. Stop driving mode or revoke the permissions in browser settings at any time.</p>
+      <p>Camera, location, motion sensors, and notifications are controlled through browser permissions where supported. Stop driving mode or revoke the permissions in browser settings at any time.</p>
       <h2>Contact</h2>
       <p>For privacy questions, open an issue at <a href="https://github.com/naveenalavilli/driveassist/issues" rel="noreferrer">github.com/naveenalavilli/driveassist</a>.</p>
     </section>

@@ -16,9 +16,9 @@
   const OBJECT_WEIGHTS = {
     person: 4,
     bicycle: 3,
-    car: 2,
+    car: 3,
     motorcycle: 3,
-    bus: 2,
+    bus: 3,
     truck: 3,
     'traffic light': 1,
     'stop sign': 3,
@@ -53,7 +53,8 @@
     if (!previousPosition || !Number.isFinite(position.timestamp)
       || !Number.isFinite(previousPosition.timestamp)) return null;
     const elapsedSeconds = (position.timestamp - previousPosition.timestamp) / 1000;
-    if (elapsedSeconds < 1) return null;
+    if (elapsedSeconds < 1 || elapsedSeconds > 10) return null;
+    if (position.accuracy > 80 || previousPosition.accuracy > 80) return null;
     return (haversineMeters(previousPosition, position) / elapsedSeconds) * MPH_PER_MPS;
   }
 
@@ -93,6 +94,98 @@
     return (predictions || [])
       .filter((prediction) => ROAD_OBJECTS.has(prediction.class) && prediction.score >= threshold)
       .sort((first, second) => second.score - first.score);
+  }
+
+  const SEVERITY = { info: 0, caution: 1, critical: 2 };
+
+  // Motion cues only: never integrate phone acceleration into vehicle speed.
+  // DeviceMotionEvent.acceleration excludes gravity; rotationRate is degrees/s.
+  function motionMagnitude(vector, axes) {
+    if (!vector || !axes.every((axis) => Number.isFinite(vector[axis]))) return null;
+    return Math.hypot(...axes.map((axis) => vector[axis]));
+  }
+
+  function analyzeMotion(previous, sample, now) {
+    const acceleration = motionMagnitude(sample?.acceleration, ['x', 'y', 'z']);
+    const rotation = motionMagnitude(sample?.rotationRate, ['alpha', 'beta', 'gamma']);
+    const valid = acceleration !== null || rotation !== null;
+    const continuous = previous?.lastSampleAt !== null && previous?.lastSampleAt !== undefined
+      && now > previous.lastSampleAt && now - previous.lastSampleAt <= 500;
+    const strongSince = acceleration !== null && acceleration >= 4.5
+      ? (continuous && previous.strongSince !== null ? previous.strongSince : now) : null;
+    const rotationSince = rotation !== null && rotation >= 25
+      ? (continuous && previous.rotationSince !== null ? previous.rotationSince : now) : null;
+    return {
+      lastSampleAt: valid ? now : null,
+      acceleration,
+      rotation,
+      strongSince,
+      rotationSince,
+      strong: strongSince !== null && now - strongSince >= 250,
+      rotating: rotationSince !== null && now - rotationSince >= 250,
+    };
+  }
+
+  function motionIsFresh(reading, now) {
+    return reading?.lastSampleAt !== null && reading?.lastSampleAt !== undefined
+      && now >= reading.lastSampleAt && now - reading.lastSampleAt <= 1500;
+  }
+
+  function currentAlerts(alerts, now) {
+    const priority = (alert) => {
+      if (['sign:wrong-way', 'sign:do-not-enter'].includes(alert.key)) return 4;
+      if (alert.key.startsWith('object:')) return 3;
+      if (alert.key === 'stop-sign' || alert.key.startsWith('sign:')) return 2;
+      return 1;
+    };
+    return alerts.filter((alert) => alert.expiresAt > now)
+      .sort((a, b) => SEVERITY[b.severity] - SEVERITY[a.severity] || priority(b) - priority(a) || b.updatedAt - a.updatedAt);
+  }
+
+  function validSpeedLimit(value) {
+    return Number.isInteger(value) && value >= 5 && value <= 85 && value % 5 === 0;
+  }
+
+  // Deliberately reject ambiguous numbers, conditional limits and non-mph signs.
+  function parseSignText(text, confidence) {
+    if (!Number.isFinite(confidence) || confidence < 75) return null;
+    const normalized = String(text).toUpperCase().replace(/[^A-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const speed = normalized.match(/^SPEED LIMIT (\d{1,2})(?: MPH)?$/);
+    if (speed && validSpeedLimit(Number(speed[1]))) {
+      return { type: 'speed-limit', limit: Number(speed[1]), label: `Speed limit ${Number(speed[1])} mph` };
+    }
+    const types = [
+      [/^STOP$/, 'stop', 'Stop sign'],
+      [/^YIELD$/, 'yield', 'Yield sign'],
+      [/^DO NOT ENTER$/, 'do-not-enter', 'Do not enter sign'],
+      [/^WRONG WAY$/, 'wrong-way', 'Wrong way sign'],
+      [/^(?:SCHOOL|SCHOOL ZONE|SCHOOL CROSSING)$/, 'school', 'School sign'],
+      [/^PEDESTRIAN (?:CROSSING|XING)$/, 'pedestrian', 'Pedestrian crossing sign'],
+      [/^(?:ROAD WORK|ROAD WORK AHEAD|WORK ZONE|ROAD CLOSED|ROAD CLOSED AHEAD)$/, 'road-work', 'Road work / closure sign'],
+    ];
+    const match = types.find(([pattern]) => pattern.test(normalized));
+    return match ? { type: match[1], label: match[2] } : null;
+  }
+
+  function signWarning(sign, speedMph, proximity = 'far') {
+    if (sign.type === 'speed-limit') {
+      const over = Number.isFinite(speedMph) ? speedMph - sign.limit : 0;
+      return { severity: over > 10 ? 'critical' : over > 3 ? 'caution' : 'info', title: `Possible ${sign.limit} mph sign` };
+    }
+    const moving = Number.isFinite(speedMph) && speedMph > 3;
+    const urgent = ['wrong-way', 'do-not-enter'].includes(sign.type)
+      || (moving && proximity === 'near' && ['stop', 'yield', 'school', 'pedestrian', 'road-work'].includes(sign.type));
+    return { severity: urgent ? 'critical' : 'caution', title: `Possible ${sign.label.toLowerCase()}` };
+  }
+
+  // Independent observations must agree and remain in the same image region.
+  function confirmSign(previous, sign, bbox, now) {
+    if (!sign) return null;
+    const key = `${sign.type}:${sign.limit || ''}`;
+    const nearby = previous && Math.abs(previous.bbox[0] - bbox[0]) < 0.18
+      && Math.abs(previous.bbox[1] - bbox[1]) < 0.18;
+    const count = previous?.key === key && nearby && now - previous.seenAt < 6000 ? previous.count + 1 : 1;
+    return { key, sign, bbox, seenAt: now, count, confirmed: count >= 2 };
   }
 
   function luminance(data, index) {
@@ -175,6 +268,13 @@
     MPH_PER_MPS,
     ROAD_OBJECTS,
     analyzeLane,
+    analyzeMotion,
+    motionIsFresh,
+    currentAlerts,
+    validSpeedLimit,
+    parseSignText,
+    signWarning,
+    confirmSign,
     clamp,
     filterRoadObjects,
     formatSpeed,

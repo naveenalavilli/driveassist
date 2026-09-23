@@ -1,11 +1,12 @@
 'use strict';
 
-const VERSION = 'driveassist-v5';
+const VERSION = 'driveassist-v7';
 const APP_SHELL = [
   './',
   './index.html',
   './style.css',
   './drive-core.js',
+  './sign-reader.js',
   './script.js',
   './settings.js',
   './manifest.webmanifest',
@@ -20,6 +21,8 @@ const APP_SHELL = [
 const OFFLINE_AI_ASSETS = [
   'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js',
   'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js',
+  'https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js',
+  'https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/worker.min.js',
   'https://storage.googleapis.com/tfjs-models/savedmodel/ssdlite_mobilenet_v2/model.json',
   'https://storage.googleapis.com/tfjs-models/savedmodel/ssdlite_mobilenet_v2/group1-shard1of5',
   'https://storage.googleapis.com/tfjs-models/savedmodel/ssdlite_mobilenet_v2/group1-shard2of5',
@@ -39,7 +42,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== VERSION).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys.filter((key) => key.startsWith('driveassist-') && key !== VERSION).map((key) => caches.delete(key))))
       .then(() => self.clients.claim()),
   );
 });
@@ -69,7 +72,10 @@ self.addEventListener('fetch', (event) => {
   if (requestUrl.hostname === 'cdn.jsdelivr.net' || requestUrl.hostname === 'storage.googleapis.com') {
     event.respondWith(
       caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
-        if (response.ok) caches.open(VERSION).then((cache) => cache.put(event.request, response.clone()));
+        if (response.ok) {
+          const copy = response.clone();
+          event.waitUntil(caches.open(VERSION).then((cache) => cache.put(event.request, copy)));
+        }
         return response;
       })),
     );

@@ -38,7 +38,7 @@ for (const match of serviceWorker.matchAll(/'\.\/([^']+)'/g)) {
 }
 
 const home = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-for (const id of ['startButton', 'stopButton', 'roadCamera', 'speedValue', 'latestAlert']) {
+for (const id of ['startButton', 'stopButton', 'roadCamera', 'speedValue', 'latestAlert', 'motionStatus', 'setupMotion']) {
   if (!home.includes(`id="${id}"`)) errors.push(`index.html: missing essential driving control ${id}`);
 }
 for (const movedSection of ['capability-grid', 'settingsHeading', 'safetyHeading']) {
@@ -46,7 +46,7 @@ for (const movedSection of ['capability-grid', 'settingsHeading', 'safetyHeading
 }
 
 const info = fs.readFileSync(path.join(root, 'info.html'), 'utf8');
-for (const id of ['settingsHeading', 'speedLimit', 'confidence', 'enableLane', 'enableAudio', 'enableNotifications']) {
+for (const id of ['settingsHeading', 'speedLimit', 'confidence', 'enableLane', 'enableAudio', 'enableNotifications', 'enableMotion']) {
   if (!info.includes(`id="${id}"`)) errors.push(`info.html: missing setting ${id}`);
 }
 

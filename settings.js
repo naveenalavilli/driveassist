@@ -4,6 +4,7 @@ const settingsElements = {
   audio: document.querySelector('#enableAudio'),
   confidence: document.querySelector('#confidence'),
   lane: document.querySelector('#enableLane'),
+  motion: document.querySelector('#enableMotion'),
   notifications: document.querySelector('#enableNotifications'),
   saveState: document.querySelector('#saveState'),
   speedLimit: document.querySelector('#speedLimit'),
@@ -30,11 +31,12 @@ function saveSetting(name, value) {
 function restoreSettings() {
   settingsElements.audio.checked = loadSetting('audio', true);
   settingsElements.confidence.value = String(loadSetting('confidence', 0.55));
-  settingsElements.lane.checked = loadSetting('lane', true);
+  settingsElements.lane.checked = loadSetting('lane', false);
+  settingsElements.motion.checked = loadSetting('motion', true);
   settingsElements.notifications.checked = loadSetting('notifications', false)
     && typeof Notification !== 'undefined'
     && Notification.permission === 'granted';
-  settingsElements.speedLimit.value = String(loadSetting('speedLimit', 65));
+  settingsElements.speedLimit.value = String(loadSetting('speedLimit', ''));
 }
 
 async function updateNotifications() {
@@ -56,5 +58,6 @@ restoreSettings();
 settingsElements.audio.addEventListener('change', () => saveSetting('audio', settingsElements.audio.checked));
 settingsElements.confidence.addEventListener('change', () => saveSetting('confidence', Number(settingsElements.confidence.value)));
 settingsElements.lane.addEventListener('change', () => saveSetting('lane', settingsElements.lane.checked));
+settingsElements.motion.addEventListener('change', () => saveSetting('motion', settingsElements.motion.checked));
 settingsElements.notifications.addEventListener('change', updateNotifications);
 settingsElements.speedLimit.addEventListener('change', () => saveSetting('speedLimit', Number(settingsElements.speedLimit.value)));

@@ -174,7 +174,7 @@ a { color: inherit; }
 .road-mark-left { left: 34%; transform: rotate(13deg); }
 .road-mark-right { right: 34%; transform: rotate(-13deg); }
 
-.stage-status { position: absolute; top: 14px; right: 14px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.stage-status { position: absolute; top: 14px; right: 14px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; max-width: 48%; }
 .speed-hud {
   position: absolute;
   top: 14px;
@@ -356,7 +356,7 @@ footer nav a:hover { color: var(--accent); }
   .drive-main { padding: 8px max(8px, env(safe-area-inset-right)) 8px max(8px, env(safe-area-inset-left)); }
   .assist-stage, .video-shell { min-height: 0; }
   .video-shell { border-radius: 17px; }
-  .stage-status { top: 10px; right: 10px; }
+  .stage-status { top: 10px; right: 10px; max-width: min(48%, calc(100% - 190px)); }
   .stage-status #cameraStatus { display: none; }
   .speed-hud { top: 10px; left: 10px; min-width: 118px; padding: 8px 10px; }
   .speed-hud > span { min-width: 50px; font-size: 2.8rem; }
@@ -389,7 +389,7 @@ footer nav a:hover { color: var(--accent); }
   .header-actions #appStatus { display: none; }
   .icon-button { min-height: 36px; padding: 6px 10px; }
   .stage-status .status-chip { font-size: 0.66rem; }
-  .speed-hud small { display: none; }
+  .speed-hud small { display: block; max-width: 82px; white-space: normal; }
   .speed-hud { min-width: 96px; }
   .field-row { gap: 10px; }
   .field-row small { max-width: 170px; }
@@ -397,4 +397,25 @@ footer nav a:hover { color: var(--accent); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+}
+
+.limit-hud { position: absolute; top: 104px; left: 14px; padding: 7px 10px; border-radius: 10px; background: rgba(5, 11, 20, 0.9); color: var(--warning); font-size: 0.78rem; max-width: calc(100% - 28px); }
+.limit-hud small { display: block; margin-top: 4px; color: var(--muted); font-size: 0.7rem; }
+.limit-hud small[data-tone="warning"] { color: var(--warning); }
+.limit-hud small[data-tone="success"] { color: var(--accent); }
+.setup-dialog { width: min(560px, calc(100% - 24px)); max-height: 90dvh; overflow-y: auto; padding: 24px; color: var(--text); background: var(--bg-elevated); border: 1px solid var(--line-strong); border-radius: 18px; }
+.setup-dialog::backdrop { background: rgba(0, 0, 0, 0.8); }
+.setup-dialog h2 { margin-bottom: 16px; }
+.setup-dialog p { line-height: 1.5; }
+.setup-note { color: var(--muted); font-size: 0.85rem; }
+.setup-field { display: grid; gap: 8px; margin-bottom: 16px; }
+.setup-field select { max-width: none; width: 100%; }
+.setup-check { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
+.setup-check input { flex-shrink: 0; }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
+.error-panel { top: 150px; }
+
+@media (orientation: landscape) and (max-height: 420px) {
+  .limit-hud { top: 14px; left: 200px; max-width: calc(100% - 370px); }
+  .stage-status { max-width: 140px; }
 }

@@ -90,7 +90,7 @@ Tests use the built-in `node:test` runner and `node:assert/strict`. No test fram
 - **Content Security Policy.** `index.html` carries a restrictive CSP. TensorFlow.js needs `unsafe-eval` for its generated kernels; that is the only such allowance. Do not widen the policy to make a library work — find another approach or open an issue.
 - **Pinned CDN assets with integrity hashes.** TensorFlow.js and COCO-SSD are pinned to explicit versions with SRI `integrity` attributes. When bumping a version, update the `integrity` hash in the same change and verify it loads.
 - **Service worker cache version.** `sw.js` defines `const VERSION = 'driveassist-v5'`. Bump it whenever you change the app shell, or returning users will be served stale assets.
-- **Never commit credentials.** Firebase deployment reads a project ID and service account from repository settings. No secrets belong in this repository.
+- **Never commit credentials.** No secrets belong in this repository.
 
 ## Pull request process
 

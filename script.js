@@ -17,6 +17,15 @@ const elements = {
   stopButton: document.querySelector('#stopButton'),
   video: document.querySelector('#roadCamera'),
   videoShell: document.querySelector('#videoShell'),
+  limitStatus: document.querySelector('#limitStatus'),
+  signStatus: document.querySelector('#signStatus'),
+  motionStatus: document.querySelector('#motionStatus'),
+  setupDialog: document.querySelector('#setupDialog'),
+  setupForm: document.querySelector('#setupForm'),
+  setupLimit: document.querySelector('#setupLimit'),
+  setupLane: document.querySelector('#setupLane'),
+  setupMotion: document.querySelector('#setupMotion'),
+  setupCancel: document.querySelector('#setupCancel'),
 };
 
 const state = {
@@ -37,11 +46,27 @@ const state = {
   modelPromise: null,
   notificationPermission: typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
   stream: null,
+  session: 0,
+  lastSpeedAt: 0,
+  maintenanceTimer: null,
+  lastAudioAt: 0,
+  lastAudioSeverity: 'info',
+  signReader: null,
+  signBusy: false,
+  lastSignAt: 0,
+  detectedLimit: null,
+  stopSignObservation: null,
+  sessionSettings: null,
+  motionAccess: 'off',
+  motionReading: null,
+  motionListeningAt: 0,
+  gpsStatus: 'Waiting for GPS',
 };
 
 const DETECTION_INTERVAL_MS = 260;
 const LANE_INTERVAL_MS = 520;
-const MAX_ALERTS = 5;
+const GPS_MAX_AGE_MS = 5000;
+const SIGN_LIMIT_TTL_MS = 30000;
 
 function setChip(element, label, tone) {
   element.textContent = label;
@@ -71,18 +96,25 @@ function getSettings() {
   return {
     audio: loadSetting('audio', true),
     confidence: Number(loadSetting('confidence', 0.55)),
-    lane: loadSetting('lane', true),
+    lane: loadSetting('lane', false),
+    motion: loadSetting('motion', true),
     notifications: loadSetting('notifications', false),
-    speedLimit: Number(loadSetting('speedLimit', 65)),
+    speedLimit: loadSetting('speedLimit', null),
+    ...state.sessionSettings,
   };
 }
 
 function announceAlert(title, message, severity) {
+  const now = Date.now();
+  if (now - state.lastAudioAt < 2000 && !(severity === 'critical' && state.lastAudioSeverity !== 'critical')) return;
+  state.lastAudioAt = now;
+  state.lastAudioSeverity = severity;
   const settings = getSettings();
   if (settings.audio) {
     try {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       state.audioContext ||= new AudioContextClass();
+      if (state.audioContext.state !== 'running') return;
       const oscillator = state.audioContext.createOscillator();
       const gain = state.audioContext.createGain();
       oscillator.frequency.value = severity === 'critical' ? 880 : 620;
@@ -95,30 +127,43 @@ function announceAlert(title, message, severity) {
       // The visual warning remains available when Web Audio is unavailable.
     }
   }
+}
 
-  if (settings.notifications && document.hidden && state.notificationPermission === 'granted') {
-    try {
-      new Notification(title, { body: message, icon: 'icons/icon-192.png', tag: title });
-    } catch {
-      // Notification support differs across mobile browsers.
-    }
+function notifyPaused() {
+  if (!getSettings().notifications || state.notificationPermission !== 'granted') return;
+  const title = 'DriveAssist paused';
+  const options = { body: 'Assistance stopped because the app is hidden. Restart only while parked.', icon: 'icons/icon-192.png', tag: 'driveassist-paused' };
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.ready.then((registration) => registration.showNotification(title, options)).catch(() => {});
+  } else {
+    try { new Notification(title, options); } catch { /* Browser does not support notifications. */ }
   }
 }
 
 function renderAlerts() {
+  state.alerts = Core.currentAlerts(state.alerts, Date.now());
   const latest = state.alerts[0];
-  elements.latestAlert.textContent = latest?.title || 'Ready to assist';
+  const title = latest?.title || (state.active ? 'Monitoring road' : 'Ready to assist');
+  if (elements.latestAlert.textContent !== title) elements.latestAlert.textContent = title;
   elements.latestAlert.dataset.severity = latest?.severity || 'info';
 }
 
-function addAlert(key, severity, title, message, cooldownMs = 5000) {
-  const now = Date.now();
-  if (now - (state.lastAlertAt.get(key) || 0) < cooldownMs) return;
-  state.lastAlertAt.set(key, now);
-  state.alerts.unshift({ key, severity, title, message, date: new Date(now) });
-  state.alerts = state.alerts.slice(0, MAX_ALERTS);
+function clearAlert(key) {
+  state.alerts = state.alerts.filter((alert) => alert.key !== key);
   renderAlerts();
-  if (severity === 'critical' || severity === 'caution') announceAlert(title, message, severity);
+}
+
+function addAlert(key, severity, title, message, cooldownMs = 5000, ttlMs = 3000) {
+  const now = Date.now();
+  const previous = state.alerts.find((alert) => alert.key === key);
+  state.alerts = state.alerts.filter((alert) => alert.key !== key);
+  state.alerts.push({ key, severity, title, message, updatedAt: now, expiresAt: now + ttlMs });
+  renderAlerts();
+  const escalated = severity === 'critical' && previous?.severity !== 'critical';
+  if (state.alerts[0]?.key === key && (escalated || now - (state.lastAlertAt.get(key) || 0) >= cooldownMs)) {
+    state.lastAlertAt.set(key, now);
+    if (severity === 'critical' || severity === 'caution') announceAlert(title, message, severity);
+  }
 }
 
 function modelAvailable() {
@@ -214,6 +259,7 @@ function analyzeCurrentLane(context) {
     }
   } else {
     state.laneWarningFrames = 0;
+    clearAlert('lane');
   }
   drawLane(context, lane, elements.detectionCanvas.width, elements.detectionCanvas.height);
 }
@@ -222,29 +268,53 @@ async function detectFrame(now) {
   if (!state.active || state.detectionBusy || !state.model || now - state.lastDetectionAt < DETECTION_INTERVAL_MS) return;
   state.detectionBusy = true;
   state.lastDetectionAt = now;
+  const session = state.session;
   try {
     const settings = getSettings();
     const predictions = await state.model.detect(elements.video, 20, settings.confidence);
-    if (!state.active) return;
+    if (!state.active || session !== state.session) return;
+    clearAlert('detection-error');
     resizeCanvases();
     const context = elements.detectionCanvas.getContext('2d');
     context.clearRect(0, 0, elements.detectionCanvas.width, elements.detectionCanvas.height);
     const roadObjects = Core.filterRoadObjects(predictions, settings.confidence);
+    const objectAlerts = new Map();
+    let stopSign = null;
     for (const prediction of roadObjects) {
       const risk = Core.roadRisk(prediction, elements.video.videoWidth, elements.video.videoHeight);
       drawPrediction(context, prediction, risk);
+      if (prediction.class === 'stop sign') {
+        if (!stopSign || prediction.score > stopSign.score) stopSign = prediction;
+        continue;
+      }
       if (risk.severity === 'critical') {
-        addAlert(`object:${prediction.class}`, 'critical', `${prediction.class} close ahead`, 'Slow down and keep your attention on the road.', 4500);
+        objectAlerts.set(`object:${prediction.class}`, prediction);
       }
     }
+    state.alerts = state.alerts.filter((alert) => !alert.key.startsWith('object:') || objectAlerts.has(alert.key));
+    for (const [key, prediction] of objectAlerts) {
+      addAlert(key, 'critical', `${prediction.class} close ahead`, 'Check the road ahead.', 4500);
+    }
+    const stopBox = stopSign?.bbox.map((value, index) => value / (index % 2 ? elements.video.videoHeight : elements.video.videoWidth));
+    state.stopSignObservation = stopSign
+      ? Core.confirmSign(state.stopSignObservation, { type: 'stop', label: 'Stop sign' }, stopBox, Date.now()) : null;
+    if (state.stopSignObservation?.confirmed) {
+      const warning = Core.signWarning(state.stopSignObservation.sign, state.lastSpeedMph,
+        Core.relativeProximity(stopSign, elements.video.videoWidth, elements.video.videoHeight).label);
+      addAlert('stop-sign', warning.severity, warning.title, 'Check the posted sign and road ahead.', 6000);
+    } else if (!stopSign) clearAlert('stop-sign');
     if (now - state.lastLaneAt >= LANE_INTERVAL_MS) {
       state.lastLaneAt = now;
       analyzeCurrentLane(context);
     }
+    renderAlerts();
   } catch (error) {
+    if (!state.active || session !== state.session) return;
+    state.alerts = state.alerts.filter((alert) => !alert.key.startsWith('object:') && alert.key !== 'lane' && alert.key !== 'stop-sign');
+    elements.detectionCanvas.getContext('2d').clearRect(0, 0, elements.detectionCanvas.width, elements.detectionCanvas.height);
     addAlert('detection-error', 'info', 'Road analysis paused', error.message || 'Could not analyze this frame.', 10000);
   } finally {
-    state.detectionBusy = false;
+    if (session === state.session) state.detectionBusy = false;
   }
 }
 
@@ -254,10 +324,12 @@ function frameLoop(now) {
     return;
   }
   detectFrame(now);
+  readSigns(now);
   state.frameRequest = requestAnimationFrame(frameLoop);
 }
 
 function handlePosition(geolocationPosition) {
+  if (!state.active) return;
   const position = {
     accuracy: geolocationPosition.coords.accuracy,
     latitude: geolocationPosition.coords.latitude,
@@ -265,36 +337,194 @@ function handlePosition(geolocationPosition) {
     speed: geolocationPosition.coords.speed,
     timestamp: geolocationPosition.timestamp,
   };
-  if (position.accuracy > 80) {
-    elements.speedSource.textContent = 'GPS signal weak';
-    state.lastPosition = position;
+  if (!Number.isFinite(position.accuracy) || position.accuracy > 80
+    || Date.now() - position.timestamp > GPS_MAX_AGE_MS || position.timestamp > Date.now() + 1000) {
+    invalidateSpeed('GPS signal weak or stale');
     return;
   }
   const nextSpeed = Core.speedMphFromPosition(position, state.lastPosition);
   state.lastPosition = position;
-  if (nextSpeed === null || nextSpeed > 180) return;
+  if (!Number.isFinite(nextSpeed) || nextSpeed > 180) {
+    invalidateSpeed('Waiting for GPS', false);
+    return;
+  }
+  clearAlert('location');
+  state.lastSpeedAt = position.timestamp;
   state.lastSpeedMph = state.lastSpeedMph === null ? nextSpeed : (state.lastSpeedMph * 0.65) + (nextSpeed * 0.35);
   elements.speedValue.textContent = Core.formatSpeed(state.lastSpeedMph);
   elements.speedSource.textContent = position.speed === null ? 'GPS estimate' : 'Device GPS';
-  const speedLimit = getSettings().speedLimit;
-  if (state.lastSpeedMph > speedLimit + 3) {
-    addAlert('overspeed', 'critical', 'Over speed limit', `${Math.round(state.lastSpeedMph)} mph · selected limit ${speedLimit} mph`, 8000);
+  updateSpeedWarning();
+  refreshMotionStatus();
+}
+
+function invalidateSpeed(label, resetPosition = true) {
+  state.gpsStatus = label;
+  state.lastSpeedMph = null;
+  state.lastSpeedAt = 0;
+  if (resetPosition) state.lastPosition = null;
+  elements.speedValue.textContent = '--';
+  elements.speedSource.textContent = label;
+  clearAlert('overspeed');
+  state.alerts = state.alerts.filter((alert) => !alert.key.startsWith('sign:speed-limit'));
+  renderAlerts();
+  refreshMotionStatus();
+}
+
+// Called synchronously from Start so permission-gated browsers retain the gesture.
+async function startMotion(session) {
+  state.motionReading = null;
+  if (!getSettings().motion) { state.motionAccess = 'disabled'; refreshMotionStatus(); return; }
+  const MotionEvent = window.DeviceMotionEvent;
+  if (!MotionEvent) { state.motionAccess = 'unsupported'; refreshMotionStatus(); return; }
+  state.motionAccess = 'requesting';
+  refreshMotionStatus();
+  try {
+    const permission = typeof MotionEvent.requestPermission === 'function'
+      ? await MotionEvent.requestPermission() : 'granted';
+    if (session !== state.session) return;
+    state.motionAccess = permission === 'granted' ? 'listening' : 'denied';
+    if (permission === 'granted') {
+      state.motionListeningAt = Date.now();
+      window.addEventListener('devicemotion', handleMotion);
+    }
+  } catch {
+    if (session !== state.session) return;
+    state.motionAccess = 'denied';
+  }
+  refreshMotionStatus();
+}
+
+function handleMotion(event) {
+  if (!state.active || state.motionAccess !== 'listening') return;
+  state.motionReading = Core.analyzeMotion(state.motionReading, event, Date.now());
+  refreshMotionStatus();
+}
+
+function refreshMotionStatus() {
+  const now = Date.now();
+  if (state.lastSpeedAt && now - state.lastSpeedAt > GPS_MAX_AGE_MS) {
+    invalidateSpeed('GPS stale');
+    return;
+  }
+  const fresh = state.active && state.motionAccess === 'listening' && Core.motionIsFresh(state.motionReading, now);
+  const gpsAvailable = Number.isFinite(state.lastSpeedMph) && state.lastSpeedAt > 0
+    && now - state.lastSpeedAt <= GPS_MAX_AGE_MS;
+  let label;
+  if (fresh) {
+    label = gpsAvailable ? 'Motion ready · GPS active'
+      : state.motionReading.strong ? 'Motion fallback · strong movement'
+        : state.motionReading.rotating ? 'Motion fallback · phone rotation' : 'Motion fallback · no speed';
+  } else {
+    const labels = { off: 'Motion off', disabled: 'Motion disabled', unsupported: 'Motion unsupported',
+      denied: 'Motion permission denied', requesting: 'Motion permission pending' };
+    label = labels[state.motionAccess] || (state.motionReading || now - state.motionListeningAt > 4000
+      ? 'Motion unavailable' : 'Waiting for motion sensors');
+  }
+  if (elements.motionStatus.textContent !== label) elements.motionStatus.textContent = label;
+  elements.motionStatus.dataset.tone = fresh ? (gpsAvailable ? 'success' : 'warning') : 'neutral';
+  if (fresh && !gpsAvailable) {
+    // Preserve the GPS boundary: motion never populates mph or speed-based alerts.
+    elements.speedSource.textContent = 'Motion only';
+    if (state.motionReading.strong) {
+      addAlert('motion', 'caution', 'Strong phone movement', 'Motion-only estimate. Check the road and phone mount.', 8000, 1500);
+    } else clearAlert('motion');
+  } else {
+    if (elements.speedSource.textContent === 'Motion only') elements.speedSource.textContent = state.gpsStatus;
+    clearAlert('motion');
+  }
+}
+
+function updateSpeedWarning() {
+  const manual = getSettings().speedLimit;
+  const detected = state.detectedLimit;
+  const limit = Core.validSpeedLimit(manual) ? Math.min(manual, detected?.limit || manual) : null;
+  elements.limitStatus.textContent = limit === null ? 'Select speed threshold'
+    : detected && detected.limit <= manual ? `Alert ${limit} mph · sign estimate` : `Alert ${limit} mph · selected`;
+  if (Number.isFinite(state.lastSpeedMph) && limit !== null && state.lastSpeedMph > limit + 3) {
+    addAlert('overspeed', state.lastSpeedMph > limit + 10 ? 'critical' : 'caution',
+      `Above ${limit} mph ${detected && detected.limit <= manual ? 'sign estimate' : 'selected threshold'}`,
+      'Check posted signs and your speed.', 8000, GPS_MAX_AGE_MS);
+  } else clearAlert('overspeed');
+}
+
+function maintainStatus() {
+  if (state.lastSpeedAt && Date.now() - state.lastSpeedAt > GPS_MAX_AGE_MS) invalidateSpeed('GPS stale');
+  if (state.detectedLimit && state.detectedLimit.expiresAt <= Date.now()) state.detectedLimit = null;
+  if (state.active) updateSpeedWarning();
+  refreshMotionStatus();
+  renderAlerts();
+}
+
+async function initializeSigns(session) {
+  let reader;
+  setChip(elements.signStatus, 'Signs loading', 'working');
+  try {
+    reader = new window.DriveAssistSignReader();
+    state.signReader = reader;
+    await reader.initialize();
+    if (session !== state.session || !state.active) { reader.close(); return; }
+    setChip(elements.signStatus, 'Signs experimental', 'success');
+  } catch {
+    reader?.close();
+    if (session !== state.session) return;
+    state.signReader = null;
+    setChip(elements.signStatus, 'Text signs unavailable', 'warning');
+  }
+}
+
+async function readSigns(now) {
+  if (!state.signReader?.worker || state.signBusy || now - state.lastSignAt < 1600) return;
+  state.signBusy = true;
+  state.lastSignAt = now;
+  const session = state.session;
+  const capturedAt = Date.now();
+  try {
+    const observations = await state.signReader.read(elements.video);
+    if (!state.active || session !== state.session || Date.now() - capturedAt > 6000) return;
+    const activeKeys = new Set();
+    for (const { sign, bbox } of observations) {
+      const key = `sign:${sign.type}`;
+      activeKeys.add(key);
+      if (sign.type === 'speed-limit') {
+        // OCR can lower the selected threshold, never silently increase it.
+        if (!state.detectedLimit || sign.limit <= state.detectedLimit.limit) {
+          state.detectedLimit = { limit: sign.limit, expiresAt: Date.now() + SIGN_LIMIT_TTL_MS };
+        }
+        updateSpeedWarning();
+      }
+      const warning = Core.signWarning(sign, state.lastSpeedMph, bbox[2] * bbox[3] >= 0.035 ? 'near' : 'far');
+      addAlert(key, warning.severity, warning.title, 'Experimental sign estimate. Check the posted sign.', 8000, 6000);
+    }
+    state.alerts = state.alerts.filter((alert) => !alert.key.startsWith('sign:') || activeKeys.has(alert.key));
+    renderAlerts();
+  } catch {
+    if (session === state.session) {
+      state.signReader?.close();
+      state.signReader = null;
+      setChip(elements.signStatus, 'Text signs unavailable', 'warning');
+      state.detectedLimit = null;
+      state.alerts = state.alerts.filter((alert) => !alert.key.startsWith('sign:'));
+      updateSpeedWarning();
+    }
+  } finally {
+    if (session === state.session) state.signBusy = false;
   }
 }
 
 function handlePositionError(error) {
+  if (!state.active) return;
   const messages = {
     1: 'Location permission was denied. Speed alerts are unavailable.',
     2: 'Location is temporarily unavailable.',
     3: 'Location request timed out.',
   };
-  elements.speedSource.textContent = 'Speed unavailable';
+  invalidateSpeed('Speed unavailable');
   addAlert('location', 'info', 'GPS speed unavailable', messages[error.code] || error.message, 12000);
 }
 
 function startLocation() {
   if (!('geolocation' in navigator)) {
-    elements.speedSource.textContent = 'Not supported';
+    invalidateSpeed('GPS unsupported');
     return;
   }
   state.geoWatchId = navigator.geolocation.watchPosition(handlePosition, handlePositionError, {
@@ -317,7 +547,29 @@ function waitForVideo() {
 }
 
 function cleanUpDrive() {
+  state.session += 1;
   state.active = false;
+  window.removeEventListener('devicemotion', handleMotion);
+  state.motionAccess = 'off';
+  state.motionReading = null;
+  state.motionListeningAt = 0;
+  state.gpsStatus = 'Waiting for GPS';
+  clearInterval(state.maintenanceTimer);
+  state.maintenanceTimer = null;
+  state.signReader?.close();
+  state.signReader = null;
+  state.signBusy = false;
+  state.detectedLimit = null;
+  state.stopSignObservation = null;
+  state.lastSpeedAt = 0;
+  state.laneWarningFrames = 0;
+  state.lastDetectionAt = 0;
+  state.lastLaneAt = 0;
+  state.lastSignAt = 0;
+  state.alerts = [];
+  state.lastAlertAt.clear();
+  state.lastAudioAt = 0;
+  state.lastAudioSeverity = 'info';
   if (state.frameRequest !== null) cancelAnimationFrame(state.frameRequest);
   state.frameRequest = null;
   state.detectionBusy = false;
@@ -336,28 +588,55 @@ function cleanUpDrive() {
   elements.speedValue.textContent = '--';
   elements.speedSource.textContent = 'Waiting for GPS';
   setChip(elements.cameraStatus, 'Camera off', 'neutral');
+  setChip(elements.signStatus, 'Signs off', 'neutral');
+  updateSpeedWarning();
+  renderAlerts();
+  refreshMotionStatus();
 }
 
 async function startDrive() {
   clearError();
+  if (state.active || elements.startButton.disabled) return;
+  if ((!loadSetting('setupComplete', false) && !state.sessionSettings) || !Core.validSpeedLimit(getSettings().speedLimit)) {
+    elements.setupLimit.value = Core.validSpeedLimit(getSettings().speedLimit) ? String(getSettings().speedLimit) : '';
+    elements.setupLane.checked = getSettings().lane;
+    elements.setupMotion.checked = getSettings().motion;
+    elements.setupDialog.showModal();
+    return;
+  }
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     showError('DriveAssist needs HTTPS and a browser with camera support.');
     return;
   }
   elements.startButton.disabled = true;
+  const session = ++state.session;
   setChip(elements.appStatus, 'Starting', 'working');
   try {
+    // Denial or unavailable sensors must not block camera/GPS assistance.
+    startMotion(session);
+    // Unlock audio during the user's click, before awaiting camera/model work.
+    if (getSettings().audio) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioContextClass) {
+        state.audioContext ||= new AudioContextClass();
+        state.audioContext.resume().catch(() => {});
+      }
+    }
     await loadModel();
+    if (session !== state.session) return;
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: 'environment' }, height: { ideal: 720 }, width: { ideal: 1280 } },
     });
+    if (session !== state.session) { stream.getTracks().forEach((track) => track.stop()); return; }
     state.stream = stream;
     elements.video.srcObject = stream;
     await elements.video.play();
     await waitForVideo();
+    if (session !== state.session) return;
     resizeCanvases();
     state.active = true;
+    refreshMotionStatus();
     elements.videoShell.dataset.active = 'true';
     elements.startButton.hidden = true;
     elements.stopButton.hidden = false;
@@ -365,8 +644,12 @@ async function startDrive() {
     setChip(elements.cameraStatus, 'Camera live', 'success');
     addAlert('ready', 'info', 'DriveAssist is active', 'Road awareness is processing locally on this device.', 0);
     startLocation();
+    updateSpeedWarning();
+    state.maintenanceTimer = setInterval(maintainStatus, 500);
+    initializeSigns(session);
     state.frameRequest = requestAnimationFrame(frameLoop);
   } catch (error) {
+    if (session !== state.session) return;
     cleanUpDrive();
     const permissionDenied = error?.name === 'NotAllowedError';
     showError(permissionDenied
@@ -409,11 +692,35 @@ function initialize() {
   renderAlerts();
   elements.startButton.addEventListener('click', startDrive);
   elements.stopButton.addEventListener('click', () => stopDrive(true));
+  elements.setupCancel.addEventListener('click', () => elements.setupDialog.close());
+  elements.setupForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const speedLimit = Number(elements.setupLimit.value);
+    if (!Core.validSpeedLimit(speedLimit) || !elements.setupForm.reportValidity()) return;
+    state.sessionSettings = { speedLimit, lane: elements.setupLane.checked, motion: elements.setupMotion.checked };
+    try {
+      localStorage.setItem('driveassist:speedLimit', JSON.stringify(speedLimit));
+      localStorage.setItem('driveassist:lane', JSON.stringify(elements.setupLane.checked));
+      localStorage.setItem('driveassist:motion', JSON.stringify(elements.setupMotion.checked));
+      localStorage.setItem('driveassist:setupComplete', 'true');
+      state.sessionSettings = null;
+    } catch { /* Session preferences still apply when storage is unavailable. */ }
+    elements.setupDialog.close();
+    startDrive();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && state.active) {
+      notifyPaused();
+      stopDrive(false);
+      addAlert('hidden', 'info', 'Paused — tap Start when parked', 'Assistance stops when this screen is hidden.', 0, 60000);
+    }
+  });
   window.addEventListener('pagehide', () => stopDrive(false));
   window.addEventListener('resize', handleViewportChange);
   window.visualViewport?.addEventListener('resize', handleViewportChange);
   window.screen.orientation?.addEventListener('change', handleViewportChange);
   loadModel().catch(() => {});
+  updateSpeedWarning();
 }
 
 initialize();

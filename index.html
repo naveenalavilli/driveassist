@@ -52,6 +52,12 @@
         <div class="stage-status" aria-label="System readiness">
           <span class="status-chip" id="modelStatus" data-tone="working">AI loading</span>
           <span class="status-chip" id="cameraStatus">Camera off</span>
+          <span class="status-chip" id="signStatus">Signs off</span>
+        </div>
+
+        <div class="limit-hud" aria-live="polite">
+          <span id="limitStatus">Select speed threshold</span>
+          <small id="motionStatus">Motion off</small>
         </div>
 
         <div class="speed-hud" aria-label="Current speed">
@@ -80,6 +86,31 @@
     </section>
   </main>
 
+  <dialog id="setupDialog" aria-labelledby="setupTitle" class="setup-dialog">
+    <form id="setupForm">
+      <p class="eyebrow">Set up while parked</p>
+      <h2 id="setupTitle">Before your first drive</h2>
+      <p>DriveAssist is experimental. It can miss hazards or misread signs. Never rely on it to prevent a collision or steer your vehicle.</p>
+      <p>Securely mount your phone with the rear camera facing the road. Camera access enables local analysis; location enables speed estimates. Neither is uploaded. Keep this screen open during use.</p>
+      <label class="setup-field" for="setupLimit">Select the current road limit (mph)
+        <select id="setupLimit" required>
+          <option value="">Choose a limit</option>
+          <option>5</option><option>10</option><option>15</option><option>20</option><option>25</option><option>30</option><option>35</option><option>40</option><option>45</option><option>50</option><option>55</option><option>60</option><option>65</option><option>70</option><option>75</option><option>80</option><option>85</option>
+        </select>
+      </label>
+      <p class="setup-note">Sign reading supports selected U.S. English text signs. Repeated speed-limit reads may lower your alert threshold for 30 seconds; they never raise your selected threshold. Check actual signs. Symbol-only and conditional limits are not supported.</p>
+      <label class="setup-check"><input id="setupLane" type="checkbox"> Enable experimental lane guidance</label>
+      <label class="setup-check"><input id="setupMotion" type="checkbox" checked> Use motion sensors when GPS is unavailable</label>
+      <p class="setup-note">Motion access enables local rotation and strong-movement cues. It cannot measure driving speed; speed alerts pause without GPS. You can decline permission and keep using camera assistance.</p>
+      <label class="setup-check"><input id="setupParked" type="checkbox" required> I am parked and understand these limitations.</label>
+      <div class="setup-actions">
+        <button class="button" id="setupCancel" type="button">Cancel</button>
+        <button class="button button-primary" type="submit">Save and start</button>
+      </div>
+      <a href="privacy.html">Privacy details</a>
+    </form>
+  </dialog>
+
   <footer class="drive-footer">
     <a href="https://github.com/naveenalavilli" rel="noreferrer">Made by Naveen Alavilli</a>
   </footer>
@@ -88,6 +119,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js" integrity="sha384-vE8hbVJ4lezako5rlvE7bY0BVzWlFhZncPlckrqNwcUQpVtgbENTgZ8TBbnPjZre" crossorigin="anonymous" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js" integrity="sha384-7qLdgfEQyO9ZQi9ArRHigK+IBto4XPk468jAqc+fnsXaZIcMAhQeLwzggRK7aESl" crossorigin="anonymous" defer></script>
   <script src="drive-core.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js" integrity="sha384-r1ru3tcf6FhnCFR4B7pIFG+BhFF9LlFtz/P1y4pblWn3AGs9y3lBx5SKLNf4+rED" crossorigin="anonymous" defer></script>
+  <script src="sign-reader.js" defer></script>
   <script src="script.js" defer></script>
 </body>
 </html>

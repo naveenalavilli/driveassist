@@ -5,7 +5,7 @@
   "description": "Privacy-first browser road awareness",
   "scripts": {
     "test": "node --test",
-    "check": "node --check drive-core.js && node --check script.js && node --check settings.js && node --check sw.js"
+    "check": "node --check drive-core.js && node --check sign-reader.js && node --check script.js && node --check settings.js && node --check sw.js"
   },
   "engines": {
     "node": ">=20"

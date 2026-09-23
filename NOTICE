@@ -2,6 +2,8 @@ DriveAssist
 Copyright 2026 Naveen Alavilli
 
 This product includes software developed using TensorFlow.js and the COCO-SSD model.
+Experimental text-sign reading uses Tesseract.js 6.0.1, Tesseract.js-core 6.0.0,
+and @tesseract.js-data/eng 1.0.0, distributed under the Apache License 2.0.
 Modified files in the 2026 production-readiness update add the DriveAssist dashboard,
 GPS speed alerts, relative-proximity warnings, experimental lane guidance, PWA support,
 privacy documentation, automated tests, and author attribution.

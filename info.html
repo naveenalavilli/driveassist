@@ -35,8 +35,8 @@
       <label class="field-row" for="speedLimit">
         <span><strong>Speed alert</strong><small>Selected road limit</small></span>
         <select id="speedLimit">
-          <option value="25">25 mph</option><option value="35">35 mph</option><option value="45">45 mph</option>
-          <option value="55">55 mph</option><option value="65">65 mph</option><option value="70">70 mph</option><option value="75">75 mph</option>
+          <option value="">Choose a limit</option>
+          <option value="5">5 mph</option><option value="10">10 mph</option><option value="15">15 mph</option><option value="20">20 mph</option><option value="25">25 mph</option><option value="30">30 mph</option><option value="35">35 mph</option><option value="40">40 mph</option><option value="45">45 mph</option><option value="50">50 mph</option><option value="55">55 mph</option><option value="60">60 mph</option><option value="65">65 mph</option><option value="70">70 mph</option><option value="75">75 mph</option><option value="80">80 mph</option><option value="85">85 mph</option>
         </select>
       </label>
       <label class="field-row" for="confidence">
@@ -51,12 +51,16 @@
       <label class="field-row toggle-row" for="enableAudio">
         <span><strong>Audio warnings</strong><small>Short attention tone</small></span><input id="enableAudio" type="checkbox">
       </label>
+      <label class="field-row toggle-row" for="enableMotion">
+        <span><strong>Motion fallback</strong><small>Rotation and movement cues without GPS; no speed estimate</small></span><input id="enableMotion" type="checkbox">
+      </label>
       <label class="field-row toggle-row" for="enableNotifications">
-        <span><strong>Notifications</strong><small>Warnings when the app is hidden</small></span><input id="enableNotifications" type="checkbox">
+        <span><strong>Pause notifications</strong><small>Notify when assistance stops in background</small></span><input id="enableNotifications" type="checkbox">
       </label>
     </section>
 
     <section class="capability-grid" aria-label="DriveAssist capabilities">
+      <article><span aria-hidden="true">Aa</span><h2>Experimental sign reading</h2><p>Reads selected U.S. English text signs: speed limit, stop, yield, do not enter, wrong way, school, pedestrian crossing, and road work / closure. Repeated reads adjust warning urgency. A lower speed-limit estimate applies for 30 seconds; your selected threshold remains the maximum. Symbol-only signs and conditional limits are unsupported.</p></article>
       <article><span aria-hidden="true">⌖</span><h2>Road objects</h2><p>Recognizes people, vehicles, traffic lights, and stop signs using COCO-SSD. It does not recognize every road sign.</p></article>
       <article><span aria-hidden="true">◎</span><h2>Relative proximity</h2><p>Uses bounding-box size to label objects far, mid-range, or near. It does not claim an uncalibrated distance in meters.</p></article>
       <article><span aria-hidden="true">⇥</span><h2>Lane guidance</h2><p>Estimates bright lane markings in good visibility. Weather, road quality, curves, and camera placement reduce reliability.</p></article>
