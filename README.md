@@ -20,6 +20,7 @@ Camera and geolocation APIs require HTTPS or localhost. For best results, use a 
 - **Experimental U.S. text-sign reading:** On-device Tesseract OCR reads selected speed-limit, stop, yield, do-not-enter, wrong-way, school, pedestrian-crossing, and road-work/closure text signs. A color-surface candidate filter and two matching, nearby reads reduce incidental-text alerts. COCO-SSD also supplies repeated stop-sign detections.
 - **Sign-aware warnings:** Sign type, relative size, and available GPS speed determine warning urgency. A repeated speed-limit read can lower the selected alert threshold for 30 seconds, never raise it. The driving screen labels the active threshold as selected or a sign estimate.
 - **Current warning state:** Critical warnings take priority over cautions. Warnings clear when observations resolve or expire; missing or stale GPS readings display `--` and disable speed alerts.
+- **Session recovery:** Startup can be cancelled and times out if a dependency stalls. Camera interruption stops assistance; stale analysis clears old overlays. Screen wake lock is requested during assistance where supported and released on Stop.
 - **Experimental lane guidance:** Looks for high-contrast lane markings in the lower camera frame and warns after repeated drift estimates.
 - **Visual and audio warnings:** Warnings are rate-limited to avoid alert flooding. Optional browser notifications report when assistance stops because the app is hidden.
 - **Installable PWA:** The application shell and fetched model assets are cached after the first successful online load.
@@ -80,6 +81,8 @@ node scripts/validate-static.js
 ## Deployment
 
 Pushing `main` publishes the site through the repository's GitHub Pages configuration. The app is a static site and requires no application server or deployment credentials in the source code.
+
+An installed update takes over after all existing DriveAssist tabs and app windows close. HTML and scripts use the same cached version; downloaded model assets are retained across app-shell updates.
 
 ## Privacy and security
 

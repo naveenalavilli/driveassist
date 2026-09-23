@@ -18,7 +18,7 @@ function app() {
     } },
     navigator: {},
     localStorage: { getItem: (key) => stored.get(key) ?? null },
-    clearInterval, cancelAnimationFrame() {},
+    AbortController, setTimeout, clearTimeout, clearInterval, cancelAnimationFrame() {},
   };
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(require.resolve('../script.js'), 'utf8').replace(/initialize\(\);\s*$/, ''), sandbox);
@@ -229,4 +229,142 @@ test('late sensor permission cannot attach a listener after stopping', async () 
   await run('permission');
   assert.equal(run('attached'),0);
   assert.equal(nodes['#motionStatus'].textContent,'Motion off');
+});
+
+test('cancelled startup stops a camera that resolves after cancellation', async () => {
+  const { run, stored, nodes } = app();
+  stored.set('driveassist:setupComplete', 'true');
+  stored.set('driveassist:speedLimit', '35');
+  stored.set('driveassist:motion', 'false');
+  run(`window.isSecureContext=true; state.model={}; let resolveCamera; let stopped=0;
+    navigator.mediaDevices={getUserMedia:()=>new Promise(resolve=>{resolveCamera=resolve})};
+    const starting=startDrive();`);
+  await new Promise(setImmediate);
+  assert.equal(nodes['#stopButton'].hidden,false);
+  assert.equal(nodes['#stopButton'].textContent,'Cancel startup');
+  run('stopDrive(false); resolveCamera({getTracks:()=>[{stop(){stopped++}}]})');
+  await run('starting');
+  await new Promise(setImmediate);
+  assert.equal(run('stopped'),1);
+  assert.equal(run('state.active'),false);
+  assert.equal(run('state.starting'),false);
+  assert.equal(nodes['#startButton'].disabled,false);
+});
+
+test('hiding during model loading cancels startup without opening a camera', async () => {
+  const { run, stored } = app();
+  stored.set('driveassist:setupComplete','true');stored.set('driveassist:speedLimit','35');stored.set('driveassist:motion','false');
+  run(`window.isSecureContext=true; let cameraCalls=0; navigator.mediaDevices={getUserMedia:()=>{cameraCalls++}};
+    state.modelPromise=new Promise(()=>{}); const starting=startDrive(); document.hidden=true; handleVisibilityChange();`);
+  await run('starting');
+  assert.equal(run('cameraCalls'),0);
+  assert.equal(run('state.starting'),false);
+});
+
+test('startup timeout releases a hung step', async () => {
+  const { run } = app();
+  await assert.rejects(run('startupStep(new Promise(()=>{}),new AbortController().signal,5)'), /timed out/);
+});
+
+test('old GPS callbacks cannot update a restarted session', () => {
+  const { run, nodes } = app();
+  run(`let gpsCallback; navigator.geolocation={watchPosition(callback){gpsCallback=callback;return 1},clearWatch(){}};
+    state.active=true;startLocation();cleanUpDrive();state.active=true;
+    gpsCallback({coords:{accuracy:5,speed:30},timestamp:Date.now()});`);
+  assert.equal(nodes['#speedValue'].textContent,'--');
+});
+
+test('subsecond fixes accumulate enough time for fallback speed', () => {
+  const { run, nodes } = app();
+  run(`state.active=true; const now=Date.now();
+    handlePosition({coords:{accuracy:1,speed:null,latitude:0,longitude:0},timestamp:now-1500});
+    handlePosition({coords:{accuracy:1,speed:null,latitude:0.00005,longitude:0},timestamp:now-1000});
+    handlePosition({coords:{accuracy:1,speed:null,latitude:0.0001,longitude:0},timestamp:now-500});`);
+  assert.equal(nodes['#speedValue'].textContent,'25');
+});
+
+test('GPS jitter is not converted into a speeding warning', () => {
+  assert.equal(Core.speedMphFromPosition(
+    {latitude:0.0001,longitude:0,speed:null,accuracy:20,timestamp:2000},
+    {latitude:0,longitude:0,speed:null,accuracy:20,timestamp:1000}),null);
+});
+
+test('uncertain GPS fixes accumulate displacement before estimating speed', () => {
+  const { run,nodes }=app();
+  run(`state.active=true;const now=Date.now();
+    for(let i=0;i<=4;i++)handlePosition({coords:{accuracy:20,speed:null,latitude:i*0.0001,longitude:0},timestamp:now-4000+i*1000});`);
+  assert.equal(nodes['#speedValue'].textContent,'25');
+});
+
+test('native zero speed clears a prior fast reading without smoothing lag', () => {
+  const { run, nodes } = app();
+  run(`state.active=true;state.sessionSettings={speedLimit:25};
+    handlePosition({coords:{accuracy:5,speed:30},timestamp:Date.now()-1000});
+    handlePosition({coords:{accuracy:5,speed:0},timestamp:Date.now()});`);
+  assert.equal(nodes['#speedValue'].textContent,'0');
+  assert.equal(run("state.alerts.some(a=>a.key==='overspeed')"),false);
+});
+
+test('critical detection flicker does not bypass the sound cooldown', () => {
+  const { run } = app();
+  run(`let sounds=0; announceAlert=()=>{sounds++;return true};
+    addAlert('object:car','critical','Car ahead','');clearAlert('object:car');
+    addAlert('object:car','critical','Car ahead','');`);
+  assert.equal(run('sounds'),1);
+});
+
+test('sound suppressed by the global limiter is retried on the next observation', () => {
+  const { run } = app();
+  run(`let attempts=0;announceAlert=()=>++attempts>1;
+    addAlert('object:car','critical','Car ahead','');addAlert('object:car','critical','Car ahead','');`);
+  assert.equal(run('attempts'),2);
+});
+
+test('invalid stored confidence and boolean settings cannot disable detection silently', () => {
+  const { run, stored } = app();
+  stored.set('driveassist:confidence','99');stored.set('driveassist:lane','"false"');
+  assert.equal(run('getSettings().confidence'),0.55);
+  assert.equal(run('getSettings().lane'),false);
+});
+
+test('camera interruption stops streams, clears overlays and exposes an error', () => {
+  const { run, nodes } = app();
+  run(`state.active=true;let stopped=false;state.stream={getTracks:()=>[{stop(){stopped=true}}]};cameraInterrupted()`);
+  assert.equal(run('stopped'),true);
+  assert.equal(run('state.active'),false);
+  assert.equal(nodes['#errorPanel'].hidden,false);
+  assert.match(nodes['#errorText'].textContent,/Camera feed interrupted/);
+});
+
+test('wake locks granted after Stop are immediately released', async () => {
+  const { run } = app();
+  run(`let grantLock;let released=false;state.active=true;
+    navigator.wakeLock={request:()=>new Promise(resolve=>{grantLock=resolve})};
+    const pendingLock=keepScreenAwake(state.session);cleanUpDrive();grantLock({release:async()=>{released=true}});`);
+  await run('pendingLock');
+  assert.equal(run('released'),true);
+  assert.equal(run('state.wakeLock'),null);
+});
+
+test('multiple signs of one type retain the most urgent observation', async () => {
+  const { run } = app();
+  run(`state.active=true;state.lastSpeedMph=25;
+    state.signReader={worker:{},read:async()=>[
+      {sign:{type:'stop',label:'Stop sign'},bbox:[0.2,0.2,0.3,0.3]},
+      {sign:{type:'stop',label:'Stop sign'},bbox:[0.8,0.1,0.01,0.01]}]};`);
+  await run('readSigns(2000)');
+  assert.equal(run("state.alerts.find(a=>a.key==='sign:stop').severity"),'critical');
+});
+
+test('a model timeout permits retry and disposes its late model result', async () => {
+  const { run } = app();
+  run(`let finishLoad;let disposed=false;window.tf={};
+    window.cocoSsd={load:()=>new Promise(resolve=>{finishLoad=resolve})};
+    const originalStep=startupStep;startupStep=(operation,signal)=>originalStep(operation,signal,5);`);
+  await assert.rejects(run('loadModel()'),/timed out/);
+  assert.equal(run('state.modelPromise'),null);
+  run('finishLoad({dispose(){disposed=true}})');
+  await new Promise(setImmediate);
+  assert.equal(run('disposed'),true);
+  assert.equal(run('state.model'),null);
 });

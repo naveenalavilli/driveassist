@@ -42,7 +42,8 @@
     const a = Math.sin(latitudeDelta / 2) ** 2
       + Math.cos(firstLatitude) * Math.cos(secondLatitude)
       * Math.sin(longitudeDelta / 2) ** 2;
-    return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const bounded = clamp(a, 0, 1);
+    return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(bounded), Math.sqrt(1 - bounded));
   }
 
   function speedMphFromPosition(position, previousPosition) {
@@ -55,7 +56,14 @@
     const elapsedSeconds = (position.timestamp - previousPosition.timestamp) / 1000;
     if (elapsedSeconds < 1 || elapsedSeconds > 10) return null;
     if (position.accuracy > 80 || previousPosition.accuracy > 80) return null;
-    return (haversineMeters(previousPosition, position) / elapsedSeconds) * MPH_PER_MPS;
+    const validCoordinates = (point) => Number.isFinite(point.latitude) && Math.abs(point.latitude) <= 90
+      && Number.isFinite(point.longitude) && Math.abs(point.longitude) <= 180;
+    if (!validCoordinates(position) || !validCoordinates(previousPosition)) return null;
+    const distance = haversineMeters(previousPosition, position);
+    const uncertainty = Math.max(0, position.accuracy || 0) + Math.max(0, previousPosition.accuracy || 0);
+    // Displacement within the accuracy bounds may just be GPS jitter.
+    if (distance <= uncertainty) return null;
+    return (distance / elapsedSeconds) * MPH_PER_MPS;
   }
 
   function formatSpeed(speedMph) {

@@ -47,6 +47,7 @@
   class SignReader {
     constructor() {
       this.worker = null;
+      this.ready = false;
       this.closed = false;
       this.preview = document.createElement('canvas');
       this.snapshot = document.createElement('canvas');
@@ -72,16 +73,20 @@
       const worker = await withTimeout(Promise.race([loading, failed]), 30000);
       if (!worker || this.closed) return;
       await withTimeout(worker.setParameters({ tessedit_pageseg_mode: '6' }), 5000);
+      if (!this.closed) this.ready = true;
     }
 
     async read(video) {
-      if (!this.worker || this.closed || !video.videoWidth) return [];
+      if (!this.ready || !this.worker || this.closed || !video.videoWidth || !video.videoHeight) return [];
+      const capturedAt = Date.now();
       // Snapshot once so all crops and locations belong to the same frame.
       this.snapshot.width = video.videoWidth;
       this.snapshot.height = video.videoHeight;
+      const width = this.snapshot.width;
+      const height = this.snapshot.height;
       this.snapshot.getContext('2d').drawImage(video, 0, 0);
       this.preview.width = 320;
-      this.preview.height = Math.round(320 * video.videoHeight / video.videoWidth);
+      this.preview.height = Math.round(320 * height / width);
       const context = this.preview.getContext('2d', { willReadFrequently: true });
       context.drawImage(this.snapshot, 0, 0, this.preview.width, this.preview.height);
       const candidates = findCandidates(context.getImageData(0, 0, this.preview.width, this.preview.height));
@@ -89,20 +94,20 @@
       for (const bbox of candidates) {
         if (this.closed) break;
         const [x, y, w, h] = bbox;
-        const sx = Math.max(0, (x - 0.008) * video.videoWidth);
-        const sy = Math.max(0, (y - 0.008) * video.videoHeight);
-        const sw = Math.min(video.videoWidth - sx, (w + 0.016) * video.videoWidth);
-        const sh = Math.min(video.videoHeight - sy, (h + 0.016) * video.videoHeight);
+        const sx = Math.max(0, (x - 0.008) * width);
+        const sy = Math.max(0, (y - 0.008) * height);
+        const sw = Math.min(width - sx, (w + 0.016) * width);
+        const sh = Math.min(height - sy, (h + 0.016) * height);
         this.crop.width = 400;
         this.crop.height = Math.round(400 * sh / sw);
         this.crop.getContext('2d').drawImage(this.snapshot, sx, sy, sw, sh, 0, 0, this.crop.width, this.crop.height);
         const { data } = await withTimeout(this.worker.recognize(this.crop), 8000);
-        if (this.closed) break;
+        if (this.closed || Date.now() - capturedAt > 6000) { this.previous = []; return []; }
         const sign = root.DriveAssistCore.parseSignText(data.text, data.confidence);
         if (!sign) continue;
         const previous = this.previous.find((item) => item.sign.type === sign.type && item.sign.limit === sign.limit
           && Math.abs(item.bbox[0] - x) < 0.18 && Math.abs(item.bbox[1] - y) < 0.18);
-        observations.push(root.DriveAssistCore.confirmSign(previous, sign, bbox, Date.now()));
+        observations.push(root.DriveAssistCore.confirmSign(previous, sign, bbox, capturedAt));
       }
       this.previous = observations;
       return observations.filter((item) => item.confirmed);
@@ -110,9 +115,13 @@
 
     close() {
       this.closed = true;
+      this.ready = false;
       if (this.worker) this.worker.terminate().catch(() => {});
       this.worker = null;
       this.previous = [];
+      this.preview.width = this.preview.height = 0;
+      this.snapshot.width = this.snapshot.height = 0;
+      this.crop.width = this.crop.height = 0;
     }
   }
   root.DriveAssistSignReader = SignReader;

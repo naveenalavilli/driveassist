@@ -30,6 +30,13 @@ const elements = {
 
 const state = {
   active: false,
+  starting: false,
+  sessionAbort: null,
+  wakeLock: null,
+  lastFrameAt: 0,
+  lastVideoTime: -1,
+  lastAnalysisAt: 0,
+  laneEstimate: null,
   alerts: [],
   audioContext: null,
   deferredInstallPrompt: null,
@@ -44,6 +51,7 @@ const state = {
   lastSpeedMph: null,
   model: null,
   modelPromise: null,
+  modelAttempt: 0,
   notificationPermission: typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
   stream: null,
   session: 0,
@@ -93,7 +101,7 @@ function loadSetting(name, fallback) {
 }
 
 function getSettings() {
-  return {
+  const settings = {
     audio: loadSetting('audio', true),
     confidence: Number(loadSetting('confidence', 0.55)),
     lane: loadSetting('lane', false),
@@ -102,19 +110,23 @@ function getSettings() {
     speedLimit: loadSetting('speedLimit', null),
     ...state.sessionSettings,
   };
+  for (const [name, fallback] of Object.entries({ audio: true, lane: false, motion: true, notifications: false })) {
+    if (typeof settings[name] !== 'boolean') settings[name] = fallback;
+  }
+  if (![0.45, 0.55, 0.7].includes(settings.confidence)) settings.confidence = 0.55;
+  if (!Core.validSpeedLimit(settings.speedLimit)) settings.speedLimit = null;
+  return settings;
 }
 
 function announceAlert(title, message, severity) {
   const now = Date.now();
-  if (now - state.lastAudioAt < 2000 && !(severity === 'critical' && state.lastAudioSeverity !== 'critical')) return;
-  state.lastAudioAt = now;
-  state.lastAudioSeverity = severity;
+  if (now - state.lastAudioAt < 2000 && !(severity === 'critical' && state.lastAudioSeverity !== 'critical')) return false;
   const settings = getSettings();
   if (settings.audio) {
     try {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       state.audioContext ||= new AudioContextClass();
-      if (state.audioContext.state !== 'running') return;
+      if (state.audioContext.state !== 'running') return false;
       const oscillator = state.audioContext.createOscillator();
       const gain = state.audioContext.createGain();
       oscillator.frequency.value = severity === 'critical' ? 880 : 620;
@@ -123,14 +135,19 @@ function announceAlert(title, message, severity) {
       oscillator.connect(gain).connect(state.audioContext.destination);
       oscillator.start();
       oscillator.stop(state.audioContext.currentTime + 0.23);
+      oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+      state.lastAudioAt = now;
+      state.lastAudioSeverity = severity;
+      return true;
     } catch {
       // The visual warning remains available when Web Audio is unavailable.
     }
   }
+  return false;
 }
 
 function notifyPaused() {
-  if (!getSettings().notifications || state.notificationPermission !== 'granted') return;
+  if (!getSettings().notifications || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   const title = 'DriveAssist paused';
   const options = { body: 'Assistance stopped because the app is hidden. Restart only while parked.', icon: 'icons/icon-192.png', tag: 'driveassist-paused' };
   if (navigator.serviceWorker) {
@@ -155,14 +172,15 @@ function clearAlert(key) {
 
 function addAlert(key, severity, title, message, cooldownMs = 5000, ttlMs = 3000) {
   const now = Date.now();
-  const previous = state.alerts.find((alert) => alert.key === key);
   state.alerts = state.alerts.filter((alert) => alert.key !== key);
   state.alerts.push({ key, severity, title, message, updatedAt: now, expiresAt: now + ttlMs });
   renderAlerts();
-  const escalated = severity === 'critical' && previous?.severity !== 'critical';
-  if (state.alerts[0]?.key === key && (escalated || now - (state.lastAlertAt.get(key) || 0) >= cooldownMs)) {
-    state.lastAlertAt.set(key, now);
-    if (severity === 'critical' || severity === 'caution') announceAlert(title, message, severity);
+  const lastSound = state.lastAlertAt.get(key);
+  const escalated = severity === 'critical' && lastSound?.severity === 'caution';
+  if (state.alerts[0]?.key === key && (escalated || !lastSound || now - lastSound.at >= cooldownMs)) {
+    if ((severity === 'critical' || severity === 'caution') && announceAlert(title, message, severity)) {
+      state.lastAlertAt.set(key, { at: now, severity });
+    }
   }
 }
 
@@ -174,13 +192,21 @@ async function loadModel() {
   if (state.model) return state.model;
   if (state.modelPromise) return state.modelPromise;
   setChip(elements.modelStatus, 'AI loading', 'working');
-  state.modelPromise = (async () => {
-    if (!modelAvailable()) throw new Error('The AI libraries could not be loaded. Check your connection and retry.');
+  const attempt = ++state.modelAttempt;
+  const operation = (async () => {
+    if (!modelAvailable()) throw new Error('The AI libraries could not be loaded. Restore your connection and reload the page.');
     if (typeof window.tf.ready === 'function') await window.tf.ready();
-    state.model = await window.cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    if (attempt !== state.modelAttempt) return null;
+    const model = await window.cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    if (attempt !== state.modelAttempt) { model.dispose?.(); return null; }
+    return model;
+  })();
+  state.modelPromise = startupStep(operation, new AbortController().signal).then((model) => {
+    state.model = model;
     setChip(elements.modelStatus, 'AI ready', 'success');
-    return state.model;
-  })().catch((error) => {
+    return model;
+  }).catch((error) => {
+    if (attempt === state.modelAttempt) state.modelAttempt += 1;
     state.modelPromise = null;
     setChip(elements.modelStatus, 'AI unavailable', 'danger');
     showError(error.message || 'The road-awareness model failed to load.');
@@ -240,11 +266,13 @@ function drawLane(context, lane, sourceWidth, sourceHeight) {
 }
 
 function analyzeCurrentLane(context) {
-  if (!getSettings().lane || !state.active) return;
+  if (!getSettings().lane || !state.active) { state.laneEstimate = null; clearAlert('lane'); return; }
   const processContext = elements.processingCanvas.getContext('2d', { willReadFrequently: true });
   processContext.drawImage(elements.video, 0, 0, elements.processingCanvas.width, elements.processingCanvas.height);
   const imageData = processContext.getImageData(0, 0, elements.processingCanvas.width, elements.processingCanvas.height);
   const lane = Core.analyzeLane(imageData, imageData.width, imageData.height);
+  const previousLane = state.laneEstimate;
+  state.laneEstimate = lane;
   const stateLabels = {
     centered: 'Centered',
     'drifting-left': 'Correct right',
@@ -253,7 +281,7 @@ function analyzeCurrentLane(context) {
     unavailable: 'Unavailable',
   };
   if (lane.state.startsWith('drifting')) {
-    state.laneWarningFrames += 1;
+    state.laneWarningFrames = previousLane?.state === lane.state ? state.laneWarningFrames + 1 : 1;
     if (state.laneWarningFrames >= 3) {
       addAlert('lane', 'caution', 'Lane position changing', stateLabels[lane.state], 6500);
     }
@@ -261,7 +289,6 @@ function analyzeCurrentLane(context) {
     state.laneWarningFrames = 0;
     clearAlert('lane');
   }
-  drawLane(context, lane, elements.detectionCanvas.width, elements.detectionCanvas.height);
 }
 
 async function detectFrame(now) {
@@ -269,10 +296,14 @@ async function detectFrame(now) {
   state.detectionBusy = true;
   state.lastDetectionAt = now;
   const session = state.session;
+  const capturedAt = Date.now();
   try {
     const settings = getSettings();
     const predictions = await state.model.detect(elements.video, 20, settings.confidence);
     if (!state.active || session !== state.session) return;
+    if (Date.now() - capturedAt > 3000) { markAnalysisUnavailable(); return; }
+    state.lastAnalysisAt = Date.now();
+    setChip(elements.modelStatus, 'AI active', 'success');
     clearAlert('detection-error');
     resizeCanvases();
     const context = elements.detectionCanvas.getContext('2d');
@@ -307,15 +338,24 @@ async function detectFrame(now) {
       state.lastLaneAt = now;
       analyzeCurrentLane(context);
     }
+    drawLane(context, state.laneEstimate, elements.detectionCanvas.width, elements.detectionCanvas.height);
     renderAlerts();
   } catch (error) {
     if (!state.active || session !== state.session) return;
-    state.alerts = state.alerts.filter((alert) => !alert.key.startsWith('object:') && alert.key !== 'lane' && alert.key !== 'stop-sign');
-    elements.detectionCanvas.getContext('2d').clearRect(0, 0, elements.detectionCanvas.width, elements.detectionCanvas.height);
-    addAlert('detection-error', 'info', 'Road analysis paused', error.message || 'Could not analyze this frame.', 10000);
+    markAnalysisUnavailable();
   } finally {
     if (session === state.session) state.detectionBusy = false;
   }
+}
+
+function markAnalysisUnavailable() {
+  state.laneEstimate = null;
+  state.laneWarningFrames = 0;
+  state.stopSignObservation = null;
+  state.alerts = state.alerts.filter((alert) => !alert.key.startsWith('object:') && alert.key !== 'lane' && alert.key !== 'stop-sign');
+  elements.detectionCanvas.getContext('2d').clearRect(0, 0, elements.detectionCanvas.width, elements.detectionCanvas.height);
+  setChip(elements.modelStatus, 'AI paused', 'warning');
+  addAlert('detection-error', 'info', 'Road analysis paused', 'No recent analysis is available.', 10000);
 }
 
 function frameLoop(now) {
@@ -337,22 +377,29 @@ function handlePosition(geolocationPosition) {
     speed: geolocationPosition.coords.speed,
     timestamp: geolocationPosition.timestamp,
   };
-  if (!Number.isFinite(position.accuracy) || position.accuracy > 80
+  if (!Number.isFinite(position.timestamp) || !Number.isFinite(position.accuracy) || position.accuracy < 0 || position.accuracy > 80
     || Date.now() - position.timestamp > GPS_MAX_AGE_MS || position.timestamp > Date.now() + 1000) {
     invalidateSpeed('GPS signal weak or stale');
     return;
   }
+  if (state.lastPosition && position.timestamp <= state.lastPosition.timestamp) return;
+  const deviceSpeed = Number.isFinite(position.speed) && position.speed >= 0;
+  // Keep the anchor until a full second has elapsed; frequent fixes otherwise
+  // continually reset the position/time fallback before it can produce a speed.
+  if (!deviceSpeed && state.lastPosition && position.timestamp - state.lastPosition.timestamp < 1000) return;
   const nextSpeed = Core.speedMphFromPosition(position, state.lastPosition);
-  state.lastPosition = position;
   if (!Number.isFinite(nextSpeed) || nextSpeed > 180) {
+    // Accumulate displacement until it exceeds GPS uncertainty, up to 10s.
+    if (!state.lastPosition || nextSpeed > 180 || position.timestamp - state.lastPosition.timestamp >= 10000) state.lastPosition = position;
     invalidateSpeed('Waiting for GPS', false);
     return;
   }
+  state.lastPosition = position;
   clearAlert('location');
   state.lastSpeedAt = position.timestamp;
-  state.lastSpeedMph = state.lastSpeedMph === null ? nextSpeed : (state.lastSpeedMph * 0.65) + (nextSpeed * 0.35);
+  state.lastSpeedMph = deviceSpeed || state.lastSpeedMph === null ? nextSpeed : (state.lastSpeedMph * 0.65) + (nextSpeed * 0.35);
   elements.speedValue.textContent = Core.formatSpeed(state.lastSpeedMph);
-  elements.speedSource.textContent = position.speed === null ? 'GPS estimate' : 'Device GPS';
+  elements.speedSource.textContent = deviceSpeed ? 'GPS estimate' : 'GPS position estimate';
   updateSpeedWarning();
   refreshMotionStatus();
 }
@@ -448,6 +495,15 @@ function updateSpeedWarning() {
 }
 
 function maintainStatus() {
+  if (state.active && state.stream) {
+    const track = state.stream.getVideoTracks()[0];
+    if (!track || track.readyState === 'ended' || track.muted) { cameraInterrupted(); return; }
+    if (elements.video.currentTime !== state.lastVideoTime) {
+      state.lastVideoTime = elements.video.currentTime;
+      state.lastFrameAt = Date.now();
+    } else if (Date.now() - state.lastFrameAt > 5000) { cameraInterrupted(); return; }
+    if (Date.now() - state.lastAnalysisAt > 5000) markAnalysisUnavailable();
+  }
   if (state.lastSpeedAt && Date.now() - state.lastSpeedAt > GPS_MAX_AGE_MS) invalidateSpeed('GPS stale');
   if (state.detectedLimit && state.detectedLimit.expiresAt <= Date.now()) state.detectedLimit = null;
   if (state.active) updateSpeedWarning();
@@ -482,6 +538,7 @@ async function readSigns(now) {
     const observations = await state.signReader.read(elements.video);
     if (!state.active || session !== state.session || Date.now() - capturedAt > 6000) return;
     const activeKeys = new Set();
+    const warnings = new Map();
     for (const { sign, bbox } of observations) {
       const key = `sign:${sign.type}`;
       activeKeys.add(key);
@@ -493,6 +550,10 @@ async function readSigns(now) {
         updateSpeedWarning();
       }
       const warning = Core.signWarning(sign, state.lastSpeedMph, bbox[2] * bbox[3] >= 0.035 ? 'near' : 'far');
+      const rank = { info: 0, caution: 1, critical: 2 };
+      if (!warnings.has(key) || rank[warning.severity] > rank[warnings.get(key).severity]) warnings.set(key, warning);
+    }
+    for (const [key, warning] of warnings) {
       addAlert(key, warning.severity, warning.title, 'Experimental sign estimate. Check the posted sign.', 8000, 6000);
     }
     state.alerts = state.alerts.filter((alert) => !alert.key.startsWith('sign:') || activeKeys.has(alert.key));
@@ -527,27 +588,81 @@ function startLocation() {
     invalidateSpeed('GPS unsupported');
     return;
   }
-  state.geoWatchId = navigator.geolocation.watchPosition(handlePosition, handlePositionError, {
+  const session = state.session;
+  try {
+    state.geoWatchId = navigator.geolocation.watchPosition(
+      (position) => { if (session === state.session) handlePosition(position); },
+      (error) => { if (session === state.session) handlePositionError(error); }, {
     enableHighAccuracy: true,
     maximumAge: 1000,
     timeout: 10000,
-  });
+    });
+  } catch { invalidateSpeed('GPS unavailable'); }
 }
 
-function waitForVideo() {
+function waitForVideo(signal) {
   return new Promise((resolve, reject) => {
     if (elements.video.readyState >= 2) return resolve();
-    const timeout = setTimeout(() => reject(new Error('The camera did not become ready in time.')), 12000);
-    elements.video.addEventListener('loadeddata', () => {
+    const finish = (error) => {
       clearTimeout(timeout);
-      resolve();
-    }, { once: true });
+      elements.video.removeEventListener('loadeddata', ready);
+      signal?.removeEventListener('abort', cancel);
+      if (error) reject(error); else resolve();
+    };
+    const ready = () => finish();
+    const cancel = () => finish(new Error('Startup cancelled'));
+    const timeout = setTimeout(() => finish(new Error('The camera did not become ready in time.')), 12000);
+    elements.video.addEventListener('loadeddata', ready, { once: true });
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) cancel();
     return undefined;
   });
 }
 
+function startupStep(operation, signal, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const finish = (callback, value) => { clearTimeout(timer); signal.removeEventListener('abort', cancel); callback(value); };
+    const cancel = () => finish(reject, new Error('Startup cancelled'));
+    const timer = setTimeout(() => finish(reject, new Error('Startup timed out. Check permissions and connection, then retry.')), timeoutMs);
+    signal.addEventListener('abort', cancel, { once: true });
+    Promise.resolve(operation).then((value) => finish(resolve, value), (error) => finish(reject, error));
+    if (signal.aborted) cancel();
+  });
+}
+
+function cameraInterrupted() {
+  if (!state.active && !state.starting) return;
+  stopDrive(false);
+  setChip(elements.appStatus, 'Camera interrupted', 'danger');
+  showError('Camera feed interrupted. Restart assistance only while parked.');
+}
+
+async function keepScreenAwake(session) {
+  if (!navigator.wakeLock) return;
+  try {
+    const lock = await navigator.wakeLock.request('screen');
+    if (session !== state.session || !state.active) { await lock.release(); return; }
+    state.wakeLock = lock;
+    lock.addEventListener('release', () => { if (state.wakeLock === lock) state.wakeLock = null; });
+  } catch { /* Unsupported or denied wake lock does not block assistance. */ }
+}
+
+function handleVisibilityChange() {
+  if (document.hidden && (state.active || state.starting)) {
+    notifyPaused();
+    stopDrive(false);
+    addAlert('hidden', 'info', 'Paused — tap Start when parked', 'Assistance stops when this screen is hidden.', 0, 60000);
+  }
+}
+
 function cleanUpDrive() {
   state.session += 1;
+  state.sessionAbort?.abort();
+  state.sessionAbort = null;
+  state.starting = false;
+  state.wakeLock?.release().catch(() => {});
+  state.wakeLock = null;
+  state.laneEstimate = null;
   state.active = false;
   window.removeEventListener('devicemotion', handleMotion);
   state.motionAccess = 'off';
@@ -585,10 +700,12 @@ function cleanUpDrive() {
   elements.startButton.hidden = false;
   elements.startButton.disabled = false;
   elements.stopButton.hidden = true;
+  elements.stopButton.textContent = 'Stop';
   elements.speedValue.textContent = '--';
   elements.speedSource.textContent = 'Waiting for GPS';
   setChip(elements.cameraStatus, 'Camera off', 'neutral');
   setChip(elements.signStatus, 'Signs off', 'neutral');
+  if (state.model) setChip(elements.modelStatus, 'AI ready', 'success');
   updateSpeedWarning();
   renderAlerts();
   refreshMotionStatus();
@@ -596,7 +713,7 @@ function cleanUpDrive() {
 
 async function startDrive() {
   clearError();
-  if (state.active || elements.startButton.disabled) return;
+  if (state.active || state.starting || document.hidden) return;
   if ((!loadSetting('setupComplete', false) && !state.sessionSettings) || !Core.validSpeedLimit(getSettings().speedLimit)) {
     elements.setupLimit.value = Core.validSpeedLimit(getSettings().speedLimit) ? String(getSettings().speedLimit) : '';
     elements.setupLane.checked = getSettings().lane;
@@ -609,6 +726,12 @@ async function startDrive() {
     return;
   }
   elements.startButton.disabled = true;
+  elements.startButton.hidden = true;
+  elements.stopButton.hidden = false;
+  elements.stopButton.textContent = 'Cancel startup';
+  state.starting = true;
+  state.sessionAbort = new AbortController();
+  const signal = state.sessionAbort.signal;
   const session = ++state.session;
   setChip(elements.appStatus, 'Starting', 'working');
   try {
@@ -622,24 +745,38 @@ async function startDrive() {
         state.audioContext.resume().catch(() => {});
       }
     }
-    await loadModel();
+    await startupStep(loadModel(), signal);
     if (session !== state.session) return;
-    const stream = await navigator.mediaDevices.getUserMedia({
+    const cameraRequest = navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: 'environment' }, height: { ideal: 720 }, width: { ideal: 1280 } },
+    }).then((stream) => {
+      if (session !== state.session || signal.aborted) stream.getTracks().forEach((track) => track.stop());
+      return stream;
     });
+    const stream = await startupStep(cameraRequest, signal);
     if (session !== state.session) { stream.getTracks().forEach((track) => track.stop()); return; }
     state.stream = stream;
+    for (const track of stream.getVideoTracks()) {
+      track.addEventListener('ended', () => { if (session === state.session) cameraInterrupted(); }, { once: true });
+      track.addEventListener('mute', () => { if (session === state.session && state.active) cameraInterrupted(); }, { once: true });
+    }
     elements.video.srcObject = stream;
-    await elements.video.play();
-    await waitForVideo();
+    await startupStep(elements.video.play(), signal, 12000);
+    await waitForVideo(signal);
     if (session !== state.session) return;
     resizeCanvases();
     state.active = true;
+    state.starting = false;
+    state.lastFrameAt = Date.now();
+    state.lastAnalysisAt = Date.now();
+    state.lastVideoTime = -1;
+    keepScreenAwake(session);
     refreshMotionStatus();
     elements.videoShell.dataset.active = 'true';
     elements.startButton.hidden = true;
     elements.stopButton.hidden = false;
+    elements.stopButton.textContent = 'Stop';
     setChip(elements.appStatus, 'Drive active', 'success');
     setChip(elements.cameraStatus, 'Camera live', 'success');
     addAlert('ready', 'info', 'DriveAssist is active', 'Road awareness is processing locally on this device.', 0);
@@ -682,7 +819,13 @@ function initializeInstallPrompt() {
 
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+    window.addEventListener('load', async () => {
+      try {
+        await navigator.serviceWorker.register('./sw.js');
+        const registration = await navigator.serviceWorker.ready;
+        registration.active?.postMessage('cache-models');
+      } catch { /* Online assistance remains usable without a service worker. */ }
+    });
   }
 }
 
@@ -708,13 +851,7 @@ function initialize() {
     elements.setupDialog.close();
     startDrive();
   });
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && state.active) {
-      notifyPaused();
-      stopDrive(false);
-      addAlert('hidden', 'info', 'Paused — tap Start when parked', 'Assistance stops when this screen is hidden.', 0, 60000);
-    }
-  });
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('pagehide', () => stopDrive(false));
   window.addEventListener('resize', handleViewportChange);
   window.visualViewport?.addEventListener('resize', handleViewportChange);

@@ -13,7 +13,11 @@ const settingsElements = {
 function loadSetting(name, fallback) {
   try {
     const value = localStorage.getItem(`driveassist:${name}`);
-    return value === null ? fallback : JSON.parse(value);
+    const parsed = value === null ? fallback : JSON.parse(value);
+    if (typeof fallback === 'boolean' && typeof parsed !== 'boolean') return fallback;
+    if (name === 'confidence' && ![0.45, 0.55, 0.7].includes(parsed)) return fallback;
+    if (name === 'speedLimit' && !(Number.isInteger(parsed) && parsed >= 5 && parsed <= 85 && parsed % 5 === 0)) return fallback;
+    return parsed;
   } catch {
     return fallback;
   }
@@ -49,9 +53,17 @@ async function updateNotifications() {
     settingsElements.saveState.textContent = 'Notifications are not supported';
     return;
   }
-  const permission = await Notification.requestPermission();
-  settingsElements.notifications.checked = permission === 'granted';
-  saveSetting('notifications', settingsElements.notifications.checked);
+  settingsElements.notifications.disabled = true;
+  try {
+    const permission = await Notification.requestPermission();
+    settingsElements.notifications.checked = permission === 'granted';
+    saveSetting('notifications', settingsElements.notifications.checked);
+    if (permission !== 'granted') settingsElements.saveState.textContent = 'Notification permission not granted';
+  } catch {
+    settingsElements.notifications.checked = false;
+    saveSetting('notifications', false);
+    settingsElements.saveState.textContent = 'Notifications are unavailable';
+  } finally { settingsElements.notifications.disabled = false; }
 }
 
 restoreSettings();
